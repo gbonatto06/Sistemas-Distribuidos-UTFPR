@@ -1,0 +1,10 @@
+[project]
+name = "sistemas-distribuidos-s73-26"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=50.0.1",
+    "pika==1.3.2",
+]

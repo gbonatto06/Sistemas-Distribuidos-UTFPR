@@ -1,0 +1,174 @@
+#   docker compose up -d --build rabbitmq estoque pagamento entrega
+#   docker compose run --rm c1
+#   docker compose run --rm c2 
+#   docker compose up -d --build promocoes
+#   docker compose run --rm principal
+
+secrets:
+  chave_principal:
+    file: ./chaves/privadas/principal
+  chave_estoque:
+    file: ./chaves/privadas/estoque
+  chave_pagamento:
+    file: ./chaves/privadas/pagamento
+  chave_entrega:
+    file: ./chaves/privadas/entrega
+  chave_promocoes:
+    file: ./chaves/privadas/promocoes
+
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # painel web: http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  estoque:
+    build:
+      context: .
+      args:
+        SERVICO: estoque
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      EVENTOS_VISIVEIS: "1"   # rastro dos eventos no log; 0 silencia
+      PRODUTOS: |
+        1|Teclado Mecanico|349.90|9|A
+        2|Mouse Gamer|189.50|15|A
+        3|Monitor 24 polegadas|899.00|5|B
+        4|Headset Bluetooth|259.90|8|B
+        5|Webcam Full HD|179.00|1|C
+    secrets:
+      - source: chave_estoque
+        target: chave_privada
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pagamento:
+    build:
+      context: .
+      args:
+        SERVICO: pagamento
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      EVENTOS_VISIVEIS: "1"
+    secrets:
+      - source: chave_pagamento
+        target: chave_privada
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  principal:
+    build:
+      context: .
+      args:
+        SERVICO: principal
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      EVENTOS_VISIVEIS: "1"   # rastro dos eventos no menu; 0 silencia
+    secrets:
+      - source: chave_principal
+        target: chave_privada
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+
+  promocoes:
+    build:
+      context: .
+      args:
+        SERVICO: promocoes
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      EVENTOS_VISIVEIS: "1"
+      PROMOCAO_INTERVALO: "30"   # segundos entre uma promocao e a seguinte
+    secrets:
+      - source: chave_promocoes
+        target: chave_privada
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # processos dedicados que só escutam.
+  # sem chave privada eles nao conseguem publicar nem se quisessem
+  c1:
+    build:
+      context: .
+      args:
+        PACOTE: consumidor_promocoes
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      CONSUMIDOR_ID: c1
+      CATEGORIAS_INTERESSE: "A,B"
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  c2:
+    build:
+      context: .
+      args:
+        PACOTE: consumidor_promocoes
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      CONSUMIDOR_ID: c2
+      CATEGORIAS_INTERESSE: ""   # vazio = todas as categorias (promocao.#)
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  entrega:
+    build:
+      context: .
+      args:
+        SERVICO: entrega
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+    secrets:
+      - source: chave_entrega
+        target: chave_privada
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
