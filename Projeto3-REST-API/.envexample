@@ -1,0 +1,15 @@
+# Copie para .env e preencha.
+# RESEND_API_KEY e WEBHOOK_SEGREDO vao para os containers como secret (ver docker-compose.yml)
+
+# Chave da API do Resend (https://resend.com/api-keys). Vazio = e-mails so no log.
+RESEND_API_KEY=
+
+# Sem dominio verificado no Resend, use o remetente de teste: ele so entrega
+# no e-mail dono da conta Resend.
+EMAIL_REMETENTE=Loja UTFPR <onboarding@resend.dev>
+
+# Segredo HMAC entre o Mock de Pagamento e o MS Pagamento (assina o webhook)
+WEBHOOK_SEGREDO=troque-este-segredo
+
+# Segundos entre uma promocao e a seguinte
+PROMOCAO_INTERVALO=30
