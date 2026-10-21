@@ -1,0 +1,200 @@
+#   docker compose up -d --build
+#   docker compose logs -f principal estoque pagamento mock-pagamento entrega promocoes
+#
+#   Loja (frontend):    http://localhost:8080
+#   Gateway:            http://localhost:8000/docs
+#   Estoque:            http://localhost:8001/docs
+#   Mock de Pagamento:  http://localhost:8003 (painel de cobrancas)
+#   RabbitMQ:           http://localhost:15672 (guest/guest)
+#
+#   Segredos ficam num .env ao lado deste arquivo (ver .env.example).
+
+volumes:
+  estoque_dados:   # SQLite do Estoque; docker compose down -v zera o estoque
+
+secrets:
+  chave_principal:
+    file: ./chaves/privadas/principal
+  chave_estoque:
+    file: ./chaves/privadas/estoque
+  chave_pagamento:
+    file: ./chaves/privadas/pagamento
+  chave_entrega:
+    file: ./chaves/privadas/entrega
+  chave_promocoes:
+    file: ./chaves/privadas/promocoes
+  # o valor vem do .env e chega no container como arquivo, nao como env
+  webhook_segredo:
+    environment: WEBHOOK_SEGREDO
+  resend_api_key:
+    environment: RESEND_API_KEY
+
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # painel web: http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  estoque:
+    build:
+      context: .
+      args:
+        SERVICO: estoque
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      EVENTOS_VISIVEIS: "1"   # rastro dos eventos no log; 0 silencia
+      ESTOQUE_DB: /data/estoque.db
+      ESTOQUE_PORTA: "8001"
+      # so semeia com o banco vazio; depois vale o que esta no volume
+      PRODUTOS: |
+        1|Teclado Mecanico|349.90|9|A
+        2|Mouse Gamer|189.50|15|A
+        3|Monitor 24 polegadas|899.00|5|B
+        4|Headset Bluetooth|259.90|8|B
+        5|Webcam Full HD|179.00|1|C
+    ports:
+      - "8001:8001"   # so para debug; o Gateway usa a rede interna
+    secrets:
+      - source: chave_estoque
+        target: chave_privada
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+      - estoque_dados:/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pagamento:
+    build:
+      context: .
+      args:
+        SERVICO: pagamento
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      EVENTOS_VISIVEIS: "1"
+      PAGAMENTO_PORTA: "8002"
+      MOCK_PAGAMENTO_URL: http://mock-pagamento:8003
+      # o Mock chama este endereco pela rede interna do Docker
+      PAGAMENTO_WEBHOOK_URL: http://pagamento:8002/webhook
+    secrets:
+      - source: chave_pagamento
+        target: chave_privada
+      - webhook_segredo
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mock-pagamento:
+        condition: service_started
+    restart: unless-stopped
+
+  # sistema externo: imagem propria, sem RabbitMQ e sem chaves
+  mock-pagamento:
+    build: ./mock_pagamento
+    environment:
+      MOCK_PORTA: "8003"
+      URL_PUBLICA: http://localhost:8003   # o navegador abre o checkout aqui
+    secrets:
+      - webhook_segredo
+    ports:
+      - "8003:8003"
+    restart: unless-stopped
+
+  principal:
+    build:
+      context: .
+      args:
+        SERVICO: principal
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      EVENTOS_VISIVEIS: "1"   # rastro dos eventos no log; 0 silencia
+      PRINCIPAL_PORTA: "8000"
+      ESTOQUE_URL: http://estoque:8001
+    ports:
+      - "8000:8000"   # o navegador (REST + SSE) fala com o Gateway
+    secrets:
+      - source: chave_principal
+        target: chave_privada
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      estoque:
+        condition: service_started
+    restart: unless-stopped
+
+  promocoes:
+    build:
+      context: .
+      args:
+        SERVICO: promocoes
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+      EVENTOS_VISIVEIS: "1"
+      PROMOCAO_INTERVALO: ${PROMOCAO_INTERVALO:-30}   # segundos entre uma promocao e a seguinte
+      ESTOQUE_URL: http://estoque:8001
+      # API externa de e-mail; sem chave os e-mails so aparecem no log
+      EMAIL_REMETENTE: ${EMAIL_REMETENTE:-Loja UTFPR <onboarding@resend.dev>}
+    secrets:
+      - source: chave_promocoes
+        target: chave_privada
+      - resend_api_key
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      estoque:
+        condition: service_started
+    restart: unless-stopped
+
+  # interface web (React + TypeScript), servida pelo nginx
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # o navegador chama o Gateway direto, entao e o endereco visto do host
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "8080:80"
+    depends_on:
+      - principal
+    restart: unless-stopped
+
+  entrega:
+    build:
+      context: .
+      args:
+        SERVICO: entrega
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      CHAVE_PRIVADA: /run/secrets/chave_privada
+      CHAVES_PUBLICAS: /app/chaves/publicas
+    secrets:
+      - source: chave_entrega
+        target: chave_privada
+    volumes:
+      - ./chaves/publicas:/app/chaves/publicas:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped

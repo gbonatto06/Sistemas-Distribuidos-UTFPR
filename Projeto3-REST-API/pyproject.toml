@@ -1,0 +1,14 @@
+[project]
+name = "projeto3-rest-api"
+version = "0.1.0"
+description = "E-commerce em microsservicos com REST, SSE e RabbitMQ"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=50.0.1",
+    "fastapi>=0.143.2",
+    "httpx>=0.28.1",
+    "pika==1.3.2",
+    "sse-starlette>=3.5.0",
+    "uvicorn>=0.54.0",
+]
